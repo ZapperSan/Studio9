@@ -1,0 +1,649 @@
+@page "/access-management"
+@using Studio9.Models
+@using Microsoft.EntityFrameworkCore
+@using Studio9.Data
+@using Action = Studio9.Models.Action
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject PermissionService PermissionService
+@rendermode InteractiveServer
+
+<PageTitle>Access Management</PageTitle>
+
+<h3>Access & Actions Management</h3>
+
+@if (loading)
+{
+    <div class="text-center">
+        <div class="spinner-border" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+}
+else
+{
+    <!-- Access Selection -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5>Select Access</h5>
+            <button class="btn btn-success btn-sm" @onclick="() => showCreateAccessModal = true">
+                + Create New Access
+            </button>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <select class="form-select" @onchange="OnAccessSelected">
+                        <option value="">-- Select an Access --</option>
+                        @foreach (var access in accesses)
+                        {
+                            <option value="@access.Id">@access.Title</option>
+                        }
+                    </select>
+                </div>
+                @if (selectedAccess != null)
+                {
+                    <div class="col-md-6">
+                        <button class="btn btn-warning btn-sm me-2" @onclick="OpenEditAccessModal">
+                            Edit Access
+                        </button>
+                        <button class="btn btn-danger btn-sm" @onclick="DeleteAccess">
+                            Delete Access
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (selectedAccess != null)
+    {
+        <!-- Access Details -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>Access Details: @selectedAccess.Title</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row">
+                    <dt class="col-sm-3">Name:</dt>
+                    <dd class="col-sm-9">@selectedAccess.Title</dd>
+
+                    <dt class="col-sm-3">Description:</dt>
+                    <dd class="col-sm-9">@(selectedAccess.Note ?? "No description")</dd>
+                </dl>
+            </div>
+        </div>
+
+        <!-- Assigned Actions -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5>Actions Available for @selectedAccess.Title</h5>
+                <button class="btn btn-primary" @onclick="OpenAddActionModal">
+                    Add Action
+                </button>
+            </div>
+            <div class="card-body">
+                @if (!accessActions.Any())
+                {
+                    <p class="text-muted">No actions assigned to this access.</p>
+                }
+                else
+                {
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Action Name</th>
+                                <th>Description</th>
+                                <th>Created At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var accessAction in accessActions)
+                            {
+                                <tr>
+                                    <td><strong>@accessAction.Action.Title</strong></td>
+                                    <td>@accessAction.Action.Note</td>
+                                    <td>@accessAction.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                    <td>
+                                        <button class="btn btn-danger btn-sm" 
+                                                @onclick="() => RemoveActionFromAccess(accessAction.Id)">
+                                            Remove
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        <!-- Usage Statistics -->
+        <div class="card">
+            <div class="card-header">
+                <h5>Usage Statistics</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card bg-light">
+                            <div class="card-body text-center">
+                                <h3 class="text-primary">@rolePermissionsCount</h3>
+                                <p class="mb-0">Role Permissions</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-light">
+                            <div class="card-body text-center">
+                                <h3 class="text-success">@userOverridesCount</h3>
+                                <p class="mb-0">User Overrides</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-light">
+                            <div class="card-body text-center">
+                                <h3 class="text-info">@accessActions.Count</h3>
+                                <p class="mb-0">Available Actions</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- All Actions List -->
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5>All Available Actions in System</h5>
+        </div>
+        <div class="card-body">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Description</th>
+                        <th>Used in Accesses</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var action in allActions)
+                    {
+                        <tr>
+                            <td><strong>@action.Title</strong></td>
+                            <td>@action.Note</td>
+                            <td>
+                                <span class="badge bg-secondary">
+                                    @actionUsageCounts.GetValueOrDefault(action.Id, 0) accesses
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+<!-- Create Access Modal -->
+@if (showCreateAccessModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create New Access</h5>
+                    <button type="button" class="btn-close" @onclick="CloseCreateAccessModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" @bind="newAccessName" 
+                               placeholder="e.g., Products, Customers, Reports" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" @bind="newAccessDescription" rows="3"
+                                  placeholder="What does this access control?"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseCreateAccessModal">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-success" @onclick="CreateAccess">
+                        Create Access
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Edit Access Modal -->
+@if (showEditAccessModal && selectedAccess != null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Access</h5>
+                    <button type="button" class="btn-close" @onclick="CloseEditAccessModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" @bind="editAccessName" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" @bind="editAccessDescription" rows="3"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseEditAccessModal">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="UpdateAccess">
+                        Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Add Action Modal -->
+@if (showAddActionModal && selectedAccess != null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add Action to @selectedAccess.Title</h5>
+                    <button type="button" class="btn-close" @onclick="() => showAddActionModal = false"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Select Action</label>
+                        <select class="form-select" @bind="selectedActionId">
+                            <option value="0">-- Select an Action --</option>
+                            @foreach (var action in availableActions)
+                            {
+                                <option value="@action.Id">@action.Title - @action.Note</option>
+                            }
+                        </select>
+                    </div>
+                    @if (!availableActions.Any())
+                    {
+                        <div class="alert alert-info">
+                            All available actions have been assigned to this access.
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="() => showAddActionModal = false">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="AddActionToAccess" 
+                            disabled="@(!availableActions.Any())">
+                        Add Action
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Alert Messages -->
+@if (!string.IsNullOrEmpty(alertMessage))
+{
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div class="alert @alertClass alert-dismissible fade show" role="alert">
+            @alertMessage
+            <button type="button" class="btn-close" @onclick="() => alertMessage = null"></button>
+        </div>
+    </div>
+}
+
+@code {
+    private bool loading = true;
+    private List<Access> accesses = new();
+    private List<Action> allActions = new();
+    private List<Action> availableActions = new();
+    
+    private Dictionary<int,int> actionUsageCounts = new();
+
+    private Access? selectedAccess;
+    private List<AccessAction> accessActions = new();
+    private int rolePermissionsCount = 0;
+    private int userOverridesCount = 0;
+
+    // Modal state
+    private bool showCreateAccessModal = false;
+    private bool showEditAccessModal = false;
+    private bool showAddActionModal = false;
+
+    // Access form fields
+    private string newAccessName = string.Empty;
+    private string? newAccessDescription;
+
+    private string editAccessName = string.Empty;
+    private string? editAccessDescription;
+
+    // Action selection
+    private int selectedActionId = 0;
+
+    // Alert
+    private string? alertMessage;
+    private string alertClass = "alert-success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        loading = false;
+    }
+
+    private async Task LoadData()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        accesses = await db.Accesses
+            .OrderBy(a => a.Title)
+            .ToListAsync();
+
+        allActions = await db.Actions
+            .OrderBy(a => a.Title)
+            .ToListAsync();
+        
+        actionUsageCounts = await db.AccessActions
+            .GroupBy(aa => aa.ActionId)
+            .Select(g => new { ActionId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(g => g.ActionId, g => g.Count);
+    }
+
+    private async Task OnAccessSelected(ChangeEventArgs e)
+    {
+        var accessIdString = e.Value?.ToString();
+
+        if (string.IsNullOrWhiteSpace(accessIdString) || !int.TryParse(accessIdString, out var accessId) || accessId <= 0)
+        {
+            selectedAccess = null;
+            accessActions.Clear();
+            rolePermissionsCount = 0;
+            userOverridesCount = 0;
+            return;
+        }
+
+        selectedAccess = accesses.FirstOrDefault(a => a.Id == accessId);
+        if (selectedAccess != null)
+        {
+            await LoadAccessData(accessId);
+        }
+        else
+        {
+            accessActions.Clear();
+            rolePermissionsCount = 0;
+            userOverridesCount = 0;
+        }
+    }
+
+    private async Task LoadAccessData(int accessId)
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        accessActions = await db.AccessActions
+            .Include(aa => aa.Action)
+            .Where(aa => aa.AccessId == accessId)
+            .OrderBy(aa => aa.Action.Title)
+            .ToListAsync();
+
+        // Count role permissions using this access
+        var accessActionIds = accessActions.Select(aa => aa.Id).ToList();
+        rolePermissionsCount = await db.RoleAccessPermissions
+            .Where(rap => accessActionIds.Contains(rap.AccessActionId))
+            .CountAsync();
+
+        // Count user overrides using this access
+        userOverridesCount = await db.UserAccessOverrides
+            .Where(uao => accessActionIds.Contains(uao.AccessActionId))
+            .CountAsync();
+    }
+
+    private void CloseCreateAccessModal()
+    {
+        showCreateAccessModal = false;
+        newAccessName = string.Empty;
+        newAccessDescription = null;
+    }
+
+    private async Task CreateAccess()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (string.IsNullOrWhiteSpace(newAccessName))
+        {
+            ShowAlert("Access name is required", "alert-warning");
+            return;
+        }
+
+        // Check if name already exists
+        var nameExists = await db.Accesses.AnyAsync(a => a.Title == newAccessName);
+        if (nameExists)
+        {
+            ShowAlert("Access with this name already exists", "alert-danger");
+            return;
+        }
+
+        var newAccess = new Access
+        {
+            Title = newAccessName,
+            Note = newAccessDescription
+        };
+
+        db.Accesses.Add(newAccess);
+        await db.SaveChangesAsync();
+
+        await LoadData();
+        CloseCreateAccessModal();
+
+        // Auto-select the newly created access
+        selectedAccess = newAccess;
+        await LoadAccessData(newAccess.Id);
+
+        ShowAlert($"Access '{newAccess.Title}' created successfully", "alert-success");
+    }
+
+    private void CloseEditAccessModal()
+    {
+        showEditAccessModal = false;
+        editAccessName = string.Empty;
+        editAccessDescription = null;
+    }
+
+    private void OpenEditAccessModal()
+    {
+        if (selectedAccess == null) return;
+
+        editAccessName = selectedAccess.Title;
+        editAccessDescription = selectedAccess.Note;
+        showEditAccessModal = true;
+    }
+
+    private async Task UpdateAccess()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (selectedAccess == null) return;
+
+        if (string.IsNullOrWhiteSpace(editAccessName))
+        {
+            ShowAlert("Access name is required", "alert-warning");
+            return;
+        }
+
+        // Check if name already exists for another access
+        var nameExists = await db.Accesses
+            .AnyAsync(a => a.Title == editAccessName && a.Id != selectedAccess.Id);
+        if (nameExists)
+        {
+            ShowAlert("Access with this name already exists", "alert-danger");
+            return;
+        }
+
+        selectedAccess.Title = editAccessName;
+        selectedAccess.Note = editAccessDescription;
+
+        await db.SaveChangesAsync();
+        await LoadData();
+
+        CloseEditAccessModal();
+        ShowAlert("Access updated successfully", "alert-success");
+    }
+
+    private async Task DeleteAccess()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (selectedAccess == null) return;
+
+        var accessName = selectedAccess.Title;
+
+        // Check if there are any access-actions
+        var hasAccessActions = await db.AccessActions
+            .AnyAsync(aa => aa.AccessId == selectedAccess.Id);
+
+        if (hasAccessActions)
+        {
+            ShowAlert("Cannot delete access with assigned actions. Remove all actions first.", "alert-danger");
+            return;
+        }
+
+        db.Accesses.Remove(selectedAccess);
+        await db.SaveChangesAsync();
+
+        await LoadData();
+        selectedAccess = null;
+        accessActions.Clear();
+        rolePermissionsCount = 0;
+        userOverridesCount = 0;
+
+        ShowAlert($"Access '{accessName}' deleted successfully", "alert-success");
+    }
+
+    private async Task AddActionToAccess()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (selectedAccess == null || selectedActionId == 0)
+        {
+            ShowAlert("Please select an action", "alert-warning");
+            return;
+        }
+
+        // Check if already assigned
+        var exists = await db.AccessActions
+            .AnyAsync(aa => aa.AccessId == selectedAccess.Id && aa.ActionId == selectedActionId);
+
+        if (exists)
+        {
+            ShowAlert("This action is already assigned to this access", "alert-warning");
+            return;
+        }
+
+        var accessAction = new AccessAction
+        {
+            AccessId = selectedAccess.Id,
+            ActionId = selectedActionId,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        db.AccessActions.Add(accessAction);
+        await db.SaveChangesAsync();
+
+        await LoadAccessData(selectedAccess.Id);
+        showAddActionModal = false;
+        ShowAlert("Action added successfully", "alert-success");
+        UpdateActionUsageCount(selectedActionId, 1);
+    }
+
+    private async Task RemoveActionFromAccess(int accessActionId)
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        var accessAction = await db.AccessActions.FindAsync(accessActionId);
+        if (accessAction == null) return;
+
+        // Check if this access-action is used in role permissions or user overrides
+        var usedInRolePermissions = await db.RoleAccessPermissions
+            .AnyAsync(rap => rap.AccessActionId == accessActionId);
+        
+        var usedInUserOverrides = await db.UserAccessOverrides
+            .AnyAsync(uao => uao.AccessActionId == accessActionId);
+
+        if (usedInRolePermissions || usedInUserOverrides)
+        {
+            ShowAlert("Cannot remove action: it is being used in role permissions or user overrides", "alert-danger");
+            return;
+        }
+
+        db.AccessActions.Remove(accessAction);
+        await db.SaveChangesAsync();
+
+        if (selectedAccess != null)
+        {
+            await LoadAccessData(selectedAccess.Id);
+        }
+        ShowAlert("Action removed successfully", "alert-success");
+        UpdateActionUsageCount(accessAction.ActionId, -1);
+    }
+
+    private void ShowAlert(string message, string cssClass)
+    {
+        alertMessage = message;
+        alertClass = cssClass;
+        StateHasChanged();
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(3000);
+            alertMessage = null;
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private async Task OpenAddActionModal()
+    {
+        if (selectedAccess == null)
+        {
+            ShowAlert("Please select an access first", "alert-warning");
+            return;
+        }
+
+        // Get all actions that are NOT already assigned to this access
+        var assignedActionIds = accessActions.Select(aa => aa.ActionId).ToList();
+        availableActions = allActions
+            .Where(a => !assignedActionIds.Contains(a.Id))
+            .OrderBy(a => a.Title)
+            .ToList();
+
+        selectedActionId = 0;
+        showAddActionModal = true;
+    }
+    
+    private void UpdateActionUsageCount(int actionId, int delta)
+    {
+        if (actionUsageCounts.ContainsKey(actionId))
+        {
+            actionUsageCounts[actionId] += delta;
+            if (actionUsageCounts[actionId] <= 0)
+                actionUsageCounts.Remove(actionId);
+        }
+        else if (delta > 0)
+        {
+            actionUsageCounts[actionId] = delta;
+        }
+    }
+}

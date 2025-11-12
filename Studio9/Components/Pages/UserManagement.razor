@@ -1,0 +1,846 @@
+@page "/user-management"
+@using Models
+@using Microsoft.EntityFrameworkCore
+@using Studio9.Data
+@inject ApplicationDbContext DbContext
+@inject PermissionService PermissionService
+@rendermode InteractiveServer
+
+<PageTitle>User Management</PageTitle>
+
+<h3>User Role & Access Management</h3>
+
+@if (loading)
+{
+    <div class="text-center">
+        <div class="spinner-border" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+}
+else
+{
+    <!-- User Selection -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5>Select User</h5>
+            <button class="btn btn-success btn-sm" @onclick="() => showCreateUserModal = true">
+                + Create New User
+            </button>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <select class="form-select" @onchange="OnUserSelected">
+                        <option value="">-- Select a User --</option>
+                        @foreach (var user in users)
+                        {
+                            <option value="@user.Id">@user.Name @user.Surname (@user.Email)</option>
+                        }
+                    </select>
+                </div>
+                @if (selectedUser != null)
+                {
+                    <div class="col-md-6">
+                        <button class="btn btn-warning btn-sm me-2" @onclick="OpenEditUserModal">
+                            Edit User
+                        </button>
+                        <button class="btn btn-danger btn-sm" @onclick="DeleteUser">
+                            Delete User
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (selectedUser != null)
+    {
+        <!-- User Roles Section -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5>Assigned Roles for @selectedUser.Name</h5>
+                <button class="btn btn-primary btn-sm" @onclick="() => showAddRoleModal = true">
+                    + Add Role
+                </button>
+            </div>
+            <div class="card-body">
+                @if (!userRoles.Any())
+                {
+                    <p class="text-muted">No roles assigned to this user.</p>
+                }
+                else
+                {
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Role Name</th>
+                                <th>Description</th>
+                                <th>Assigned At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var userRole in userRoles)
+                            {
+                                <tr>
+                                    <td><strong>@userRole.Role.Title</strong></td>
+                                    <td>@userRole.Role.Note</td>
+                                    <td>@userRole.AssignedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                    <td>
+                                        <button class="btn btn-danger btn-sm" 
+                                                @onclick="() => RemoveRoleFromUser(userRole.Id)">
+                                            Remove
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        <!-- User Access Overrides Section -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5>Access Overrides for @selectedUser.Name</h5>
+                <button class="btn btn-success btn-sm" @onclick="() => showAddOverrideModal = true">
+                    + Add Override
+                </button>
+            </div>
+            <div class="card-body">
+                @if (!userOverrides.Any())
+                {
+                    <p class="text-muted">No access overrides for this user.</p>
+                }
+                else
+                {
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Access</th>
+                                <th>Action</th>
+                                <th>State</th>
+                                <th>Reason</th>
+                                <th>Granted At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var override_ in userOverrides)
+                            {
+                                <tr class="">
+                                    <td><strong>@override_.AccessAction.Access.Title</strong></td>
+                                    <td>@override_.AccessAction.Action.Title</td>
+                                    <td>
+                                        <span class="badge @GetPermissionBadgeClass(override_.PermissionState)">
+                                            @override_.PermissionState
+                                        </span>
+                                    </td>
+                                    <td>@override_.Reason</td>
+                                    <td>@override_.GrantedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                    <td>
+                                        <button class="btn btn-danger btn-sm" 
+                                                @onclick="() => RemoveOverride(override_.Id)">
+                                            Remove
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        <!-- All Permissions Summary -->
+        <div class="card">
+            <div class="card-header">
+                <h5>Complete Permissions Summary</h5>
+            </div>
+            <div class="card-body">
+                <button class="btn btn-info btn-sm mb-3" @onclick="LoadUserPermissions">
+                    Refresh Permissions
+                </button>
+
+                @if (allPermissions != null)
+                {
+                    <table class="table table-sm table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Access</th>
+                                <th>Action</th>
+                                <th>Has Permission</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var access in allPermissions)
+                            {
+                                @foreach (var action in access.Value)
+                                {
+                                    <tr>
+                                        <td>@access.Key</td>
+                                        <td>@action.Key</td>
+                                        <td>
+                                            @if (action.Value)
+                                            {
+                                                <span class="text-success">✓ Allowed</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-danger">✗ Denied</span>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    }
+}
+
+<!-- Create User Modal -->
+@if (showCreateUserModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create New User</h5>
+                    <button type="button" class="btn-close" @onclick="CloseCreateUserModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" @bind="newUserName" placeholder="Enter user name" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Surname *</label>
+                        <input type="text" class="form-control" @bind="newUserSurname" placeholder="Enter user surname" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Email *</label>
+                        <input type="email" class="form-control" @bind="newUserEmail" placeholder="Enter email address" />
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" @bind="newUserIsActive" id="createActiveCheck" />
+                            <label class="form-check-label" for="createActiveCheck">
+                                Active User
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseCreateUserModal">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-success" @onclick="CreateUser">
+                        Create User
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Edit User Modal -->
+@if (showEditUserModal && selectedUser != null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit User</h5>
+                    <button type="button" class="btn-close" @onclick="CloseEditUserModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" @bind="editUserName" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Surname</label>
+                        <input type="text" class="form-control" @bind="editUserSurname" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Email *</label>
+                        <input type="email" class="form-control" @bind="editUserEmail" />
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" @bind="editUserIsActive" id="editActiveCheck" />
+                            <label class="form-check-label" for="editActiveCheck">
+                                Active User
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseEditUserModal">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="UpdateUser">
+                        Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Add Role Modal -->
+@if (showAddRoleModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add Role to User</h5>
+                    <button type="button" class="btn-close" @onclick="() => showAddRoleModal = false"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Select Role</label>
+                        <select class="form-select" @bind="selectedRoleId">
+                            <option value="0">-- Select a Role --</option>
+                            @foreach (var role in availableRoles)
+                            {
+                                <option value="@role.Id">@role.Title - @role.Note</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="() => showAddRoleModal = false">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="AddRoleToUser">
+                        Add Role
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Add Override Modal -->
+@if (showAddOverrideModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add Access Override</h5>
+                    <button type="button" class="btn-close" @onclick="() => showAddOverrideModal = false"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Access</label>
+                        <select class="form-select" @onchange="OnAccessChanged">
+                            <option value="0">-- Select Access --</option>
+                            @foreach (var access in accesses)
+                            {
+                                <option value="@access.Id">@access.Title</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Action</label>
+                        <select class="form-select" @bind="selectedActionId">
+                            <option value="0">-- Select Action --</option>
+                            @foreach (var action in filteredActions)
+                            {
+                                <option value="@action.Id">@action.Title</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Permission State</label>
+                        <select class="form-select" @bind="selectedPermissionState">
+                            <option value="@PermissionState.Allowed">Allowed</option>
+                            <option value="@PermissionState.Denied">Denied</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Reason (Optional)</label>
+                        <textarea class="form-control" @bind="overrideReason" rows="3" 
+                                  placeholder="Why is this override being granted?"></textarea>
+                    </div>
+                    
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="() => showAddOverrideModal = false">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-success" @onclick="AddOverride">
+                        Add Override
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Alert Messages -->
+@if (!string.IsNullOrEmpty(alertMessage))
+{
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div class="alert @alertClass alert-dismissible fade show" role="alert">
+            @alertMessage
+            <button type="button" class="btn-close" @onclick="() => alertMessage = null"></button>
+        </div>
+    </div>
+}
+
+@code {
+    private bool loading = true;
+    private List<User> users = new();
+    private List<Role> availableRoles = new();
+    private List<Access> accesses = new();
+    private List<Models.Action> actions = new();
+    private List<Models.Action> filteredActions = new();
+
+    private User? selectedUser;
+    private List<UserRole> userRoles = new();
+    private List<UserAccessOverride> userOverrides = new();
+    private Dictionary<string, Dictionary<string, bool>>? allPermissions;
+
+    // Modal state
+    private bool showCreateUserModal = false;
+    private bool showEditUserModal = false;
+    private bool showAddRoleModal = false;
+    private bool showAddOverrideModal = false;
+
+    // User form fields
+    private string newUserName = string.Empty;
+    private string newUserSurname = string.Empty;
+    private string newUserEmail = string.Empty;
+    private bool newUserIsActive = true;
+
+    private string editUserName = string.Empty;
+    private string editUserSurname = string.Empty;
+    private string editUserEmail = string.Empty;
+    private bool editUserIsActive = true;
+
+    // Form fields
+    private int selectedRoleId = 0;
+    private int selectedAccessId = 0;
+    private int selectedActionId = 0;
+    private PermissionState selectedPermissionState = PermissionState.Allowed;
+    private string? overrideReason;
+    private DateTime? overrideExpiresAt;
+
+    // Alert
+    private string? alertMessage;
+    private string alertClass = "alert-success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        loading = false;
+    }
+
+    private async Task LoadData()
+    {
+        users = await DbContext.Users
+            .OrderBy(u => u.Name)
+            .ToListAsync();
+
+        availableRoles = await DbContext.Roles
+            .OrderBy(r => r.Title)
+            .ToListAsync();
+
+        accesses = await DbContext.Accesses
+            .OrderBy(a => a.Title)
+            .ToListAsync();
+
+        actions = await DbContext.Actions
+            .OrderBy(a => a.Title)
+            .ToListAsync();
+    }
+
+    private async Task OnUserSelected(ChangeEventArgs e)
+    {
+        var userIdString = e.Value?.ToString();
+        
+        if (string.IsNullOrWhiteSpace(userIdString) || !int.TryParse(userIdString, out var userId) || userId <= 0)
+        {
+            selectedUser = null;
+            userRoles.Clear();
+            userOverrides.Clear();
+            allPermissions = null;
+            return;
+        }
+
+        selectedUser = users.FirstOrDefault(u => u.Id == userId);
+        if (selectedUser != null)
+        {
+            await LoadUserData(userId);
+        }
+        else
+        {
+            userRoles.Clear();
+            userOverrides.Clear();
+            allPermissions = null;
+        }
+    }
+
+    private async Task LoadUserData(int userId)
+    {
+        userRoles = await DbContext.UserRoles
+            .Include(ur => ur.Role)
+            .Where(ur => ur.UserId == userId)
+            .OrderBy(ur => ur.Role.Title)
+            .ToListAsync();
+
+        userOverrides = await DbContext.UserAccessOverrides
+            .Include(uao => uao.AccessAction)
+                .ThenInclude(aa => aa.Access)
+            .Include(uao => uao.AccessAction)
+                .ThenInclude(aa => aa.Action)
+            .Where(uao => uao.UserId == userId)
+            .OrderBy(uao => uao.AccessAction.Access.Title)
+            .ToListAsync();
+
+        allPermissions = null;
+    }
+
+    private void CloseCreateUserModal()
+    {
+        showCreateUserModal = false;
+        newUserName = string.Empty;
+        newUserSurname = string.Empty;
+        newUserEmail = string.Empty;
+        newUserIsActive = true;
+    }
+
+    private async Task CreateUser()
+    {
+        if (string.IsNullOrWhiteSpace(newUserName))
+        {
+            ShowAlert("Name is required", "alert-warning");
+            return;
+        }
+        
+        if (string.IsNullOrWhiteSpace(newUserSurname))
+        {
+            ShowAlert("Surname is required", "alert-warning");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(newUserEmail))
+        {
+            ShowAlert("Email is required", "alert-warning");
+            return;
+        }
+        
+        var emailExists = await DbContext.Users.AnyAsync(u => u.Email == newUserEmail);
+        if (emailExists)
+        {
+            ShowAlert("Email already exists", "alert-danger");
+            return;
+        }
+
+        var newUser = new User
+        {
+            Name = newUserName,
+            Surname = newUserSurname,
+            Email = newUserEmail,
+            IsActive = newUserIsActive,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        DbContext.Users.Add(newUser);
+        await DbContext.SaveChangesAsync();
+
+        await LoadData();
+        CloseCreateUserModal();
+        
+        selectedUser = newUser;
+        await LoadUserData(newUser.Id);
+
+        ShowAlert($"User '{newUser.Name}' created successfully", "alert-success");
+    }
+
+    private void CloseEditUserModal()
+    {
+        showEditUserModal = false;
+        editUserName = string.Empty;
+        editUserSurname = string.Empty;
+        editUserEmail = string.Empty;
+        editUserIsActive = true;
+    }
+
+    private void OpenEditUserModal()
+    {
+        if (selectedUser == null) return;
+
+        editUserName = selectedUser.Name;
+        editUserSurname = selectedUser.Surname;
+        editUserEmail = selectedUser.Email;
+        editUserIsActive = selectedUser.IsActive;
+        showEditUserModal = true;
+    }
+
+    private async Task UpdateUser()
+    {
+        if (selectedUser == null) return;
+        
+        if (string.IsNullOrWhiteSpace(editUserName))
+        {
+            ShowAlert("Name is required", "alert-warning");
+            return;
+        }
+        
+        if (string.IsNullOrWhiteSpace(editUserSurname))
+        {
+            ShowAlert("Surname is required", "alert-warning");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(editUserEmail))
+        {
+            ShowAlert("Email is required", "alert-warning");
+            return;
+        }
+
+        // Check if email already exists for another user
+        var emailExists = await DbContext.Users
+            .AnyAsync(u => u.Email == editUserEmail && u.Id != selectedUser.Id);
+        if (emailExists)
+        {
+            ShowAlert("Email is already in use", "alert-danger");
+            return;
+        }
+
+        selectedUser.Name = editUserName;
+        selectedUser.Surname = editUserSurname;
+        selectedUser.Email = editUserEmail;
+        selectedUser.IsActive = editUserIsActive;
+        selectedUser.UpdatedAt = DateTime.UtcNow;
+
+        await DbContext.SaveChangesAsync();
+        await LoadData();
+
+        CloseEditUserModal();
+        ShowAlert("User updated successfully", "alert-success");
+    }
+
+    private async Task DeleteUser()
+    {
+        if (selectedUser == null) return;
+        
+        var userName = selectedUser.Name;
+        
+        var relatedUserRoles = await DbContext.UserRoles
+            .Where(ur => ur.UserId == selectedUser.Id)
+            .ToListAsync();
+        DbContext.UserRoles.RemoveRange(relatedUserRoles);
+
+        var relatedOverrides = await DbContext.UserAccessOverrides
+            .Where(uao => uao.UserId == selectedUser.Id)
+            .ToListAsync();
+        DbContext.UserAccessOverrides.RemoveRange(relatedOverrides);
+
+        DbContext.Users.Remove(selectedUser);
+        await DbContext.SaveChangesAsync();
+
+        await LoadData();
+        selectedUser = null;
+        userRoles.Clear();
+        userOverrides.Clear();
+        allPermissions = null;
+
+        ShowAlert($"User '{userName}' deleted successfully", "alert-success");
+    }
+
+    private async Task AddRoleToUser()
+    {
+        if (selectedUser == null || selectedRoleId == 0)
+        {
+            ShowAlert("Please select a role", "alert-warning");
+            return;
+        }
+
+        // Check if already assigned
+        var exists = await DbContext.UserRoles
+            .AnyAsync(ur => ur.UserId == selectedUser.Id && ur.RoleId == selectedRoleId);
+
+        if (exists)
+        {
+            ShowAlert("This role is already assigned to the user", "alert-warning");
+            return;
+        }
+
+        var userRole = new UserRole
+        {
+            UserId = selectedUser.Id,
+            RoleId = selectedRoleId,
+            AssignedAt = DateTime.UtcNow
+        };
+
+        DbContext.UserRoles.Add(userRole);
+        await DbContext.SaveChangesAsync();
+
+        await LoadUserData(selectedUser.Id);
+        showAddRoleModal = false;
+        selectedRoleId = 0;
+        ShowAlert("Role added successfully", "alert-success");
+    }
+
+    private async Task RemoveRoleFromUser(int userRoleId)
+    {
+        var userRole = await DbContext.UserRoles.FindAsync(userRoleId);
+        if (userRole != null)
+        {
+            DbContext.UserRoles.Remove(userRole);
+            await DbContext.SaveChangesAsync();
+
+            if (selectedUser != null)
+            {
+                await LoadUserData(selectedUser.Id);
+            }
+            ShowAlert("Role removed successfully", "alert-success");
+        }
+    }
+
+    private async Task OnAccessChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var accessId))
+        {
+            selectedAccessId = accessId;
+        }
+        else
+        {
+            selectedAccessId = 0;
+        }
+        
+        selectedActionId = 0;
+
+        if (selectedAccessId > 0)
+        {
+            var accessActionIds = await DbContext.AccessActions
+                .Where(aa => aa.AccessId == selectedAccessId)
+                .Select(aa => aa.ActionId)
+                .ToListAsync();
+
+            filteredActions = actions.Where(a => accessActionIds.Contains(a.Id)).ToList();
+        }
+        else
+        {
+            filteredActions.Clear();
+        }
+    }
+
+    private async Task AddOverride()
+    {
+        if (selectedUser == null || selectedAccessId == 0 || selectedActionId == 0)
+        {
+            ShowAlert("Please select both Access and Action", "alert-warning");
+            return;
+        }
+        
+        var accessAction = await DbContext.AccessActions
+            .FirstOrDefaultAsync(aa => aa.AccessId == selectedAccessId && aa.ActionId == selectedActionId);
+
+        if (accessAction == null)
+        {
+            ShowAlert("This Access-Action combination doesn't exist", "alert-danger");
+            return;
+        }
+
+        // Check if override already exists
+        var existingOverride = await DbContext.UserAccessOverrides
+            .FirstOrDefaultAsync(uao => uao.UserId == selectedUser.Id && uao.AccessActionId == accessAction.Id);
+
+        if (existingOverride != null)
+        {
+            existingOverride.PermissionState = selectedPermissionState;
+            existingOverride.Reason = overrideReason;
+            existingOverride.GrantedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            var userOverride = new UserAccessOverride
+            {
+                UserId = selectedUser.Id,
+                AccessActionId = accessAction.Id,
+                PermissionState = selectedPermissionState,
+                Reason = overrideReason,
+                GrantedAt = DateTime.UtcNow
+            };
+
+            DbContext.UserAccessOverrides.Add(userOverride);
+        }
+
+        await DbContext.SaveChangesAsync();
+        await LoadUserData(selectedUser.Id);
+        
+        showAddOverrideModal = false;
+        selectedAccessId = 0;
+        selectedActionId = 0;
+        selectedPermissionState = PermissionState.Allowed;
+        overrideReason = null;
+        overrideExpiresAt = null;
+        filteredActions.Clear();
+
+        ShowAlert("Access override added successfully", "alert-success");
+    }
+
+    private async Task RemoveOverride(int overrideId)
+    {
+        var override_ = await DbContext.UserAccessOverrides.FindAsync(overrideId);
+        if (override_ != null)
+        {
+            DbContext.UserAccessOverrides.Remove(override_);
+            await DbContext.SaveChangesAsync();
+
+            if (selectedUser != null)
+            {
+                await LoadUserData(selectedUser.Id);
+            }
+            ShowAlert("Access override removed successfully", "alert-success");
+        }
+    }
+
+    private async Task LoadUserPermissions()
+    {
+        if (selectedUser != null)
+        {
+            allPermissions = await PermissionService.GetUserPermissionsAsync(selectedUser.Id);
+        }
+    }
+
+    private string GetPermissionBadgeClass(PermissionState state)
+    {
+        return state switch
+        {
+            PermissionState.Allowed => "bg-success",
+            PermissionState.Denied => "bg-danger",
+            _ => "bg-secondary"
+        };
+    }
+
+    private void ShowAlert(string message, string cssClass)
+    {
+        alertMessage = message;
+        alertClass = cssClass;
+        StateHasChanged();
+
+        // Auto-hide after 3 seconds
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(3000);
+            alertMessage = null;
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+}
