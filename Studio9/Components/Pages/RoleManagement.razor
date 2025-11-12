@@ -1,0 +1,703 @@
+@page "/role-management"
+@using Studio9.Models
+@using Microsoft.EntityFrameworkCore
+@using Studio9.Data
+@using Action = Studio9.Models.Action
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject PermissionService PermissionService
+@rendermode InteractiveServer
+
+<PageTitle>Role Management</PageTitle>
+
+<h3>Role & Permissions Management</h3>
+
+@if (loading)
+{
+    <div class="text-center">
+        <div class="spinner-border" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+}
+else
+{
+    <!-- Role Selection -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5>Select Role</h5>
+            <button class="btn btn-success btn-sm" @onclick="() => showCreateRoleModal = true">
+                + Create New Role
+            </button>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <select class="form-select" @onchange="OnRoleSelected">
+                        <option value="">-- Select a Role --</option>
+                        @foreach (var role in roles)
+                        {
+                            <option value="@role.Id">@role.Title</option>
+                        }
+                    </select>
+                </div>
+                @if (selectedRole != null)
+                {
+                    <div class="col-md-6">
+                        <button class="btn btn-warning btn-sm me-2" @onclick="OpenEditRoleModal">
+                            Edit Role
+                        </button>
+                        <button class="btn btn-danger btn-sm" @onclick="DeleteRole">
+                            Delete Role
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (selectedRole != null)
+    {
+        <!-- Role Details -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>Role Details: @selectedRole.Title</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row">
+                    <dt class="col-sm-3">Name:</dt>
+                    <dd class="col-sm-9">@selectedRole.Title</dd>
+
+                    <dt class="col-sm-3">Description:</dt>
+                    <dd class="col-sm-9">@(selectedRole.Note ?? "No description")</dd>
+
+                    <dt class="col-sm-3">Users with this Role:</dt>
+                    <dd class="col-sm-9">
+                        <span class="badge bg-primary">@usersWithRoleCount users</span>
+                    </dd>
+                </dl>
+            </div>
+        </div>
+
+        <!-- Permissions Matrix -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5>Permissions Matrix for @selectedRole.Title</h5>
+                <div>
+                    <button class="btn btn-sm btn-outline-success me-2" @onclick="() => BulkSetPermissions(PermissionState.Allowed)">
+                        Allow All
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger me-2" @onclick="() => BulkSetPermissions(PermissionState.Denied)">
+                        Deny All
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => BulkSetPermissions(PermissionState.Undefined)">
+                        Clear All
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                @if (!permissionsMatrix.Any())
+                {
+                    <p class="text-muted">No access-action combinations available in the system.</p>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-hover">
+                            <thead>
+                                <tr>
+                                    <th style="width: 200px;">Access</th>
+                                    @foreach (var action in allActions)
+                                    {
+                                        <th class="text-center">@action.Title</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var accessGroup in permissionsMatrix.GroupBy(p => p.AccessName))
+                                {
+                                    <tr>
+                                        <td><strong>@accessGroup.Key</strong></td>
+                                        @foreach (var action in allActions)
+                                        {
+                                            var permission = accessGroup.FirstOrDefault(p => p.ActionName == action.Title);
+                                            @if (permission != null)
+                                            {
+                                                <td class="text-center">
+                                                    <select class="form-select form-select-sm @GetPermissionClass(permission.State)"
+                                                            @onchange="@(e => UpdatePermission(permission.AccessActionId, e))">
+                                                        <option value="@PermissionState.Undefined" selected="@(permission.State == PermissionState.Undefined)">-</option>
+                                                        <option value="@PermissionState.Allowed" selected="@(permission.State == PermissionState.Allowed)">✓</option>
+                                                        <option value="@PermissionState.Denied" selected="@(permission.State == PermissionState.Denied)">✗</option>
+                                                    </select>
+                                                </td>
+                                            }
+                                            else
+                                            {
+                                                <td class="text-center bg-light">
+                                                    <small class="text-muted">N/A</small>
+                                                </td>
+                                            }
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="mt-3">
+                        <small class="text-muted">
+                            <strong>Legend:</strong>
+                            <span class="badge bg-success ms-2">✓ Allowed</span>
+                            <span class="badge bg-danger ms-2">✗ Denied</span>
+                            <span class="badge bg-secondary ms-2">- Undefined</span>
+                        </small>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Quick Actions by Access -->
+        <div class="card">
+            <div class="card-header">
+                <h5>Quick Actions by Access</h5>
+            </div>
+            <div class="card-body">
+                @foreach (var access in accesses)
+                {
+                    var accessPermissions = permissionsMatrix
+                        .Where(p => p.AccessName == access.Title)
+                        .ToList();
+                    
+                    @if (accessPermissions.Any())
+                    {
+                        <div class="mb-3 p-3 border rounded">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h6 class="mb-0">@access.Title</h6>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <button class="btn btn-outline-success" 
+                                            @onclick="() => SetAccessPermissions(access.Title, PermissionState.Allowed)">
+                                        Allow All
+                                    </button>
+                                    <button class="btn btn-outline-danger" 
+                                            @onclick="() => SetAccessPermissions(access.Title, PermissionState.Denied)">
+                                        Deny All
+                                    </button>
+                                    <button class="btn btn-outline-secondary" 
+                                            @onclick="() => SetAccessPermissions(access.Title, PermissionState.Undefined)">
+                                        Clear All
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="d-flex flex-wrap gap-2">
+                                @foreach (var perm in accessPermissions)
+                                {
+                                    <span class="badge @GetPermissionBadgeClass(perm.State)">
+                                        @perm.ActionName: @GetPermissionText(perm.State)
+                                    </span>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    }
+}
+
+<!-- Create Role Modal -->
+@if (showCreateRoleModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create New Role</h5>
+                    <button type="button" class="btn-close" @onclick="CloseCreateRoleModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" @bind="newRoleName" 
+                               placeholder="e.g., Administrator, Supervisor, Guest" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" @bind="newRoleDescription" rows="3"
+                                  placeholder="What is this role for?"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseCreateRoleModal">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-success" @onclick="CreateRole">
+                        Create Role
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Edit Role Modal -->
+@if (showEditRoleModal && selectedRole != null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Role</h5>
+                    <button type="button" class="btn-close" @onclick="CloseEditRoleModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name *</label>
+                        <input type="text" class="form-control" @bind="editRoleName" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" @bind="editRoleDescription" rows="3"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseEditRoleModal">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn btn-primary" @onclick="UpdateRole">
+                        Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Alert Messages -->
+@if (!string.IsNullOrEmpty(alertMessage))
+{
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div class="alert @alertClass alert-dismissible fade show" role="alert">
+            @alertMessage
+            <button type="button" class="btn-close" @onclick="() => alertMessage = null"></button>
+        </div>
+    </div>
+}
+
+@code {
+    private bool loading = true;
+    private List<Role> roles = new();
+    private List<Access> accesses = new();
+    private List<Action> allActions = new();
+
+    private Role? selectedRole;
+    private List<PermissionMatrixItem> permissionsMatrix = new();
+    private int usersWithRoleCount = 0;
+
+    // Modal state
+    private bool showCreateRoleModal = false;
+    private bool showEditRoleModal = false;
+
+    // Role form fields
+    private string newRoleName = string.Empty;
+    private string? newRoleDescription;
+
+    private string editRoleName = string.Empty;
+    private string? editRoleDescription;
+
+    // Alert
+    private string? alertMessage;
+    private string alertClass = "alert-success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        loading = false;
+    }
+
+    private async Task LoadData()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        roles = await db.Roles
+            .OrderBy(r => r.Title)
+            .ToListAsync();
+
+        accesses = await db.Accesses
+            .OrderBy(a => a.Title)
+            .ToListAsync();
+
+        allActions = await db.Actions
+            .OrderBy(a => a.Title)
+            .ToListAsync();
+    }
+
+    private async Task OnRoleSelected(ChangeEventArgs e)
+    {
+        var roleIdString = e.Value?.ToString();
+
+        if (string.IsNullOrWhiteSpace(roleIdString) || !int.TryParse(roleIdString, out var roleId) || roleId <= 0)
+        {
+            selectedRole = null;
+            permissionsMatrix.Clear();
+            usersWithRoleCount = 0;
+            return;
+        }
+
+        selectedRole = roles.FirstOrDefault(r => r.Id == roleId);
+        if (selectedRole != null)
+        {
+            await LoadRoleData(roleId);
+        }
+        else
+        {
+            permissionsMatrix.Clear();
+            usersWithRoleCount = 0;
+        }
+    }
+
+    private async Task LoadRoleData(int roleId)
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        // Get all access-actions
+        var accessActions = await db.AccessActions
+            .Include(aa => aa.Access)
+            .Include(aa => aa.Action)
+            .ToListAsync();
+
+        // Get existing permissions for this role
+        var rolePermissions = await db.RoleAccessPermissions
+            .Where(rap => rap.RoleId == roleId)
+            .ToDictionaryAsync(rap => rap.AccessActionId, rap => rap.PermissionState);
+
+        // Build permissions matrix
+        permissionsMatrix = accessActions.Select(aa => new PermissionMatrixItem
+        {
+            AccessActionId = aa.Id,
+            AccessName = aa.Access.Title,
+            ActionName = aa.Action.Title,
+            State = rolePermissions.ContainsKey(aa.Id) ? rolePermissions[aa.Id] : PermissionState.Undefined
+        }).ToList();
+
+        // Count users with this role
+        usersWithRoleCount = await db.UserRoles
+            .Where(ur => ur.RoleId == roleId)
+            .CountAsync();
+    }
+
+    private void CloseCreateRoleModal()
+    {
+        showCreateRoleModal = false;
+        newRoleName = string.Empty;
+        newRoleDescription = null;
+    }
+
+    private async Task CreateRole()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (string.IsNullOrWhiteSpace(newRoleName))
+        {
+            ShowAlert("Role name is required", "alert-warning");
+            return;
+        }
+
+        // Check if name already exists
+        var nameExists = await db.Roles.AnyAsync(r => r.Title == newRoleName);
+        if (nameExists)
+        {
+            ShowAlert("Role with this name already exists", "alert-danger");
+            return;
+        }
+
+        var newRole = new Role
+        {
+            Title = newRoleName,
+            Note = newRoleDescription
+        };
+
+        db.Roles.Add(newRole);
+        await db.SaveChangesAsync();
+
+        await LoadData();
+        CloseCreateRoleModal();
+
+        // Auto-select the newly created role
+        selectedRole = newRole;
+        await LoadRoleData(newRole.Id);
+
+        ShowAlert($"Role '{newRole.Title}' created successfully", "alert-success");
+    }
+
+    private void CloseEditRoleModal()
+    {
+        showEditRoleModal = false;
+        editRoleName = string.Empty;
+        editRoleDescription = null;
+    }
+
+    private void OpenEditRoleModal()
+    {
+        if (selectedRole == null) return;
+
+        editRoleName = selectedRole.Title;
+        editRoleDescription = selectedRole.Note;
+        showEditRoleModal = true;
+    }
+
+    private async Task UpdateRole()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (selectedRole == null) return;
+
+        if (string.IsNullOrWhiteSpace(editRoleName))
+        {
+            ShowAlert("Role name is required", "alert-warning");
+            return;
+        }
+
+        // Check if name already exists for another role
+        var nameExists = await db.Roles
+            .AnyAsync(r => r.Title == editRoleName && r.Id != selectedRole.Id);
+        if (nameExists)
+        {
+            ShowAlert("Role with this name already exists", "alert-danger");
+            return;
+        }
+
+        var rowsAffected = await db.Roles
+            .Where(r => r.Id == selectedRole.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(r => r.Title, editRoleName)
+                .SetProperty(r => r.Note, editRoleDescription));
+
+        if (rowsAffected == 0)
+        {
+            ShowAlert("Role not found", "alert-danger");
+            return;
+        }
+
+        // Update local reference for UI
+        selectedRole.Title = editRoleName;
+        selectedRole.Note = editRoleDescription;
+        await LoadData();
+
+        CloseEditRoleModal();
+        ShowAlert("Role updated successfully", "alert-success");
+    }
+
+    private async Task DeleteRole()
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (selectedRole == null) return;
+
+        // Check if role has users
+        var hasUsers = await db.UserRoles
+            .AnyAsync(ur => ur.RoleId == selectedRole.Id);
+
+        if (hasUsers)
+        {
+            ShowAlert("Cannot delete role that has users assigned. Remove all users first.", "alert-danger");
+            return;
+        }
+
+        var roleName = selectedRole.Title;
+
+        // Remove all permissions
+        var rolePermissions = await db.RoleAccessPermissions
+            .Where(rap => rap.RoleId == selectedRole.Id)
+            .ToListAsync();
+        db.RoleAccessPermissions.RemoveRange(rolePermissions);
+
+        db.Roles.Remove(selectedRole);
+        await db.SaveChangesAsync();
+
+        await LoadData();
+        selectedRole = null;
+        permissionsMatrix.Clear();
+        usersWithRoleCount = 0;
+
+        ShowAlert($"Role '{roleName}' deleted successfully", "alert-success");
+    }
+
+    private async Task UpdatePermission(int accessActionId, ChangeEventArgs e)
+    {
+        if (selectedRole == null) return;
+        
+        using var db = DbFactory.CreateDbContext();
+
+        if (!Enum.TryParse<PermissionState>(e.Value?.ToString(), out var newState))
+            return;
+
+        var existingPermission = await db.RoleAccessPermissions
+            .FirstOrDefaultAsync(rap => rap.RoleId == selectedRole.Id && rap.AccessActionId == accessActionId);
+
+        if (existingPermission != null)
+        {
+            if (newState == PermissionState.Undefined)
+            {
+                // Remove the permission (undefined state)
+                db.RoleAccessPermissions.Remove(existingPermission);
+            }
+            else
+            {
+                existingPermission.PermissionState = newState;
+                existingPermission.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+        else if (newState != PermissionState.Undefined)
+        {
+            // Create new permission
+            var newPermission = new RoleAccessPermission
+            {
+                RoleId = selectedRole.Id,
+                AccessActionId = accessActionId,
+                PermissionState = newState,
+                CreatedAt = DateTime.UtcNow
+            };
+            db.RoleAccessPermissions.Add(newPermission);
+        }
+
+        await db.SaveChangesAsync();
+        await LoadRoleData(selectedRole.Id);
+    }
+
+    private async Task BulkSetPermissions(PermissionState state)
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (selectedRole == null) return;
+
+        foreach (var permission in permissionsMatrix)
+        {
+            var existingPermission = await db.RoleAccessPermissions
+                .FirstOrDefaultAsync(rap => rap.RoleId == selectedRole.Id && rap.AccessActionId == permission.AccessActionId);
+
+            if (existingPermission != null)
+            {
+                if (state == PermissionState.Undefined)
+                {
+                    db.RoleAccessPermissions.Remove(existingPermission);
+                }
+                else
+                {
+                    existingPermission.PermissionState = state;
+                    existingPermission.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+            else if (state != PermissionState.Undefined)
+            {
+                var newPermission = new RoleAccessPermission
+                {
+                    RoleId = selectedRole.Id,
+                    AccessActionId = permission.AccessActionId,
+                    PermissionState = state,
+                    CreatedAt = DateTime.UtcNow
+                };
+                db.RoleAccessPermissions.Add(newPermission);
+            }
+        }
+
+        await db.SaveChangesAsync();
+        await LoadRoleData(selectedRole.Id);
+        ShowAlert($"All permissions set to {state}", "alert-success");
+    }
+
+    private async Task SetAccessPermissions(string accessName, PermissionState state)
+    {
+        using var db = DbFactory.CreateDbContext();
+        
+        if (selectedRole == null) return;
+
+        var accessPermissions = permissionsMatrix.Where(p => p.AccessName == accessName);
+
+        foreach (var permission in accessPermissions)
+        {
+            var existingPermission = await db.RoleAccessPermissions
+                .FirstOrDefaultAsync(rap => rap.RoleId == selectedRole.Id && rap.AccessActionId == permission.AccessActionId);
+
+            if (existingPermission != null)
+            {
+                if (state == PermissionState.Undefined)
+                {
+                    db.RoleAccessPermissions.Remove(existingPermission);
+                }
+                else
+                {
+                    existingPermission.PermissionState = state;
+                    existingPermission.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+            else if (state != PermissionState.Undefined)
+            {
+                var newPermission = new RoleAccessPermission
+                {
+                    RoleId = selectedRole.Id,
+                    AccessActionId = permission.AccessActionId,
+                    PermissionState = state,
+                    CreatedAt = DateTime.UtcNow
+                };
+                db.RoleAccessPermissions.Add(newPermission);
+            }
+        }
+
+        await db.SaveChangesAsync();
+        await LoadRoleData(selectedRole.Id);
+        ShowAlert($"{accessName} permissions set to {state}", "alert-success");
+    }
+
+    private string GetPermissionClass(PermissionState state)
+    {
+        return state switch
+        {
+            PermissionState.Allowed => "border-success bg-success bg-opacity-10",
+            PermissionState.Denied => "border-danger bg-danger bg-opacity-10",
+            _ => ""
+        };
+    }
+
+    private string GetPermissionBadgeClass(PermissionState state)
+    {
+        return state switch
+        {
+            PermissionState.Allowed => "bg-success",
+            PermissionState.Denied => "bg-danger",
+            _ => "bg-secondary"
+        };
+    }
+
+    private string GetPermissionText(PermissionState state)
+    {
+        return state switch
+        {
+            PermissionState.Allowed => "Allowed",
+            PermissionState.Denied => "Denied",
+            _ => "Undefined"
+        };
+    }
+
+    private void ShowAlert(string message, string cssClass)
+    {
+        alertMessage = message;
+        alertClass = cssClass;
+        StateHasChanged();
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(3000);
+            alertMessage = null;
+            await InvokeAsync(StateHasChanged);
+        });
+    }
+
+    // Helper class for permissions matrix
+    private class PermissionMatrixItem
+    {
+        public int AccessActionId { get; set; }
+        public string AccessName { get; set; } = string.Empty;
+        public string ActionName { get; set; } = string.Empty;
+        public PermissionState State { get; set; }
+    }
+}

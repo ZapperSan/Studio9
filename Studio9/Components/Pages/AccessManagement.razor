@@ -492,11 +492,23 @@ else
             ShowAlert("Access with this name already exists", "alert-danger");
             return;
         }
+        
+        var rowsAffected = await db.Accesses
+            .Where(a => a.Id == selectedAccess.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(a => a.Title, editAccessName)
+                .SetProperty(a => a.Note, editAccessDescription));
 
+        if (rowsAffected == 0)
+        {
+            ShowAlert("Access not found", "alert-danger");
+            return;
+        }
+
+        // Update local reference for UI
         selectedAccess.Title = editAccessName;
         selectedAccess.Note = editAccessDescription;
-
-        await db.SaveChangesAsync();
+        
         await LoadData();
 
         CloseEditAccessModal();

@@ -2,7 +2,7 @@
 @using Models
 @using Microsoft.EntityFrameworkCore
 @using Studio9.Data
-@inject ApplicationDbContext DbContext
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject PermissionService PermissionService
 @rendermode InteractiveServer
 
@@ -450,19 +450,21 @@ else
 
     private async Task LoadData()
     {
-        users = await DbContext.Users
+        using var db = DbFactory.CreateDbContext();
+        
+        users = await db.Users
             .OrderBy(u => u.Name)
             .ToListAsync();
 
-        availableRoles = await DbContext.Roles
+        availableRoles = await db.Roles
             .OrderBy(r => r.Title)
             .ToListAsync();
 
-        accesses = await DbContext.Accesses
+        accesses = await db.Accesses
             .OrderBy(a => a.Title)
             .ToListAsync();
 
-        actions = await DbContext.Actions
+        actions = await db.Actions
             .OrderBy(a => a.Title)
             .ToListAsync();
     }
@@ -495,13 +497,15 @@ else
 
     private async Task LoadUserData(int userId)
     {
-        userRoles = await DbContext.UserRoles
+        using var db = DbFactory.CreateDbContext();
+        
+        userRoles = await db.UserRoles
             .Include(ur => ur.Role)
             .Where(ur => ur.UserId == userId)
             .OrderBy(ur => ur.Role.Title)
             .ToListAsync();
 
-        userOverrides = await DbContext.UserAccessOverrides
+        userOverrides = await db.UserAccessOverrides
             .Include(uao => uao.AccessAction)
                 .ThenInclude(aa => aa.Access)
             .Include(uao => uao.AccessAction)
@@ -524,6 +528,8 @@ else
 
     private async Task CreateUser()
     {
+        using var db = DbFactory.CreateDbContext();
+        
         if (string.IsNullOrWhiteSpace(newUserName))
         {
             ShowAlert("Name is required", "alert-warning");
@@ -542,7 +548,7 @@ else
             return;
         }
         
-        var emailExists = await DbContext.Users.AnyAsync(u => u.Email == newUserEmail);
+        var emailExists = await db.Users.AnyAsync(u => u.Email == newUserEmail);
         if (emailExists)
         {
             ShowAlert("Email already exists", "alert-danger");
@@ -558,8 +564,8 @@ else
             CreatedAt = DateTime.UtcNow
         };
 
-        DbContext.Users.Add(newUser);
-        await DbContext.SaveChangesAsync();
+        db.Users.Add(newUser);
+        await db.SaveChangesAsync();
 
         await LoadData();
         CloseCreateUserModal();
@@ -592,6 +598,8 @@ else
 
     private async Task UpdateUser()
     {
+        using var db = DbFactory.CreateDbContext();
+        
         if (selectedUser == null) return;
         
         if (string.IsNullOrWhiteSpace(editUserName))
@@ -613,21 +621,29 @@ else
         }
 
         // Check if email already exists for another user
-        var emailExists = await DbContext.Users
+        var emailExists = await db.Users
             .AnyAsync(u => u.Email == editUserEmail && u.Id != selectedUser.Id);
         if (emailExists)
         {
             ShowAlert("Email is already in use", "alert-danger");
             return;
         }
+        
+        await db.Users
+            .Where(u => u.Id == selectedUser.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(u => u.Name, editUserName)
+                .SetProperty(u => u.Surname, editUserSurname)
+                .SetProperty(u => u.Email, editUserEmail)
+                .SetProperty(u => u.IsActive, editUserIsActive)
+                .SetProperty(u => u.UpdatedAt, DateTime.UtcNow));
 
         selectedUser.Name = editUserName;
         selectedUser.Surname = editUserSurname;
         selectedUser.Email = editUserEmail;
         selectedUser.IsActive = editUserIsActive;
         selectedUser.UpdatedAt = DateTime.UtcNow;
-
-        await DbContext.SaveChangesAsync();
+        
         await LoadData();
 
         CloseEditUserModal();
@@ -636,22 +652,24 @@ else
 
     private async Task DeleteUser()
     {
+        using var db = DbFactory.CreateDbContext();
+        
         if (selectedUser == null) return;
         
         var userName = selectedUser.Name;
         
-        var relatedUserRoles = await DbContext.UserRoles
+        var relatedUserRoles = await db.UserRoles
             .Where(ur => ur.UserId == selectedUser.Id)
             .ToListAsync();
-        DbContext.UserRoles.RemoveRange(relatedUserRoles);
+        db.UserRoles.RemoveRange(relatedUserRoles);
 
-        var relatedOverrides = await DbContext.UserAccessOverrides
+        var relatedOverrides = await db.UserAccessOverrides
             .Where(uao => uao.UserId == selectedUser.Id)
             .ToListAsync();
-        DbContext.UserAccessOverrides.RemoveRange(relatedOverrides);
+        db.UserAccessOverrides.RemoveRange(relatedOverrides);
 
-        DbContext.Users.Remove(selectedUser);
-        await DbContext.SaveChangesAsync();
+        db.Users.Remove(selectedUser);
+        await db.SaveChangesAsync();
 
         await LoadData();
         selectedUser = null;
@@ -664,6 +682,8 @@ else
 
     private async Task AddRoleToUser()
     {
+        using var db = DbFactory.CreateDbContext();
+        
         if (selectedUser == null || selectedRoleId == 0)
         {
             ShowAlert("Please select a role", "alert-warning");
@@ -671,7 +691,7 @@ else
         }
 
         // Check if already assigned
-        var exists = await DbContext.UserRoles
+        var exists = await db.UserRoles
             .AnyAsync(ur => ur.UserId == selectedUser.Id && ur.RoleId == selectedRoleId);
 
         if (exists)
@@ -687,8 +707,8 @@ else
             AssignedAt = DateTime.UtcNow
         };
 
-        DbContext.UserRoles.Add(userRole);
-        await DbContext.SaveChangesAsync();
+        db.UserRoles.Add(userRole);
+        await db.SaveChangesAsync();
 
         await LoadUserData(selectedUser.Id);
         showAddRoleModal = false;
@@ -698,11 +718,13 @@ else
 
     private async Task RemoveRoleFromUser(int userRoleId)
     {
-        var userRole = await DbContext.UserRoles.FindAsync(userRoleId);
+        using var db = DbFactory.CreateDbContext();
+        
+        var userRole = await db.UserRoles.FindAsync(userRoleId);
         if (userRole != null)
         {
-            DbContext.UserRoles.Remove(userRole);
-            await DbContext.SaveChangesAsync();
+            db.UserRoles.Remove(userRole);
+            await db.SaveChangesAsync();
 
             if (selectedUser != null)
             {
@@ -714,6 +736,8 @@ else
 
     private async Task OnAccessChanged(ChangeEventArgs e)
     {
+        using var db = DbFactory.CreateDbContext();
+        
         if (int.TryParse(e.Value?.ToString(), out var accessId))
         {
             selectedAccessId = accessId;
@@ -727,7 +751,7 @@ else
 
         if (selectedAccessId > 0)
         {
-            var accessActionIds = await DbContext.AccessActions
+            var accessActionIds = await db.AccessActions
                 .Where(aa => aa.AccessId == selectedAccessId)
                 .Select(aa => aa.ActionId)
                 .ToListAsync();
@@ -742,13 +766,15 @@ else
 
     private async Task AddOverride()
     {
+        using var db = DbFactory.CreateDbContext();
+        
         if (selectedUser == null || selectedAccessId == 0 || selectedActionId == 0)
         {
             ShowAlert("Please select both Access and Action", "alert-warning");
             return;
         }
         
-        var accessAction = await DbContext.AccessActions
+        var accessAction = await db.AccessActions
             .FirstOrDefaultAsync(aa => aa.AccessId == selectedAccessId && aa.ActionId == selectedActionId);
 
         if (accessAction == null)
@@ -758,7 +784,7 @@ else
         }
 
         // Check if override already exists
-        var existingOverride = await DbContext.UserAccessOverrides
+        var existingOverride = await db.UserAccessOverrides
             .FirstOrDefaultAsync(uao => uao.UserId == selectedUser.Id && uao.AccessActionId == accessAction.Id);
 
         if (existingOverride != null)
@@ -778,10 +804,10 @@ else
                 GrantedAt = DateTime.UtcNow
             };
 
-            DbContext.UserAccessOverrides.Add(userOverride);
+            db.UserAccessOverrides.Add(userOverride);
         }
 
-        await DbContext.SaveChangesAsync();
+        await db.SaveChangesAsync();
         await LoadUserData(selectedUser.Id);
         
         showAddOverrideModal = false;
@@ -797,11 +823,13 @@ else
 
     private async Task RemoveOverride(int overrideId)
     {
-        var override_ = await DbContext.UserAccessOverrides.FindAsync(overrideId);
+        using var db = DbFactory.CreateDbContext();
+        
+        var override_ = await db.UserAccessOverrides.FindAsync(overrideId);
         if (override_ != null)
         {
-            DbContext.UserAccessOverrides.Remove(override_);
-            await DbContext.SaveChangesAsync();
+            db.UserAccessOverrides.Remove(override_);
+            await db.SaveChangesAsync();
 
             if (selectedUser != null)
             {
